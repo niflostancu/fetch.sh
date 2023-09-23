@@ -62,7 +62,7 @@ function parse_url_fragment() {
 # Accepted formats:
 # - https://github.com/{namespace}/{repository}/releases/download/{VERSION}/...
 function service:github:parse_url() {
-	if [[ "$1" =~ ^https?://[^/]+/([^/]+/[^/]+)(/?.+) ]]; then
+	if [[ "$1" =~ ^https?://[^/]+/([^/]+/[^/]+)(/.+)? ]]; then
 		_REPONAME="${BASH_REMATCH[1]}"
 		_URL_REST="${BASH_REMATCH[2]#/}"
 	else
