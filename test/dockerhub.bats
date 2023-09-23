@@ -7,7 +7,7 @@ BATS_DOCKER_URL="https://hub.docker.com/r/bats/bats"
 RUN=(run --separate-stderr)
 
 setup() {
-    true
+    [[ -n "$BATS_DELAY" ]] && sleep "$BATS_DELAY" || true
 }
 
 fetch() {

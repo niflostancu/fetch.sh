@@ -8,7 +8,7 @@ BATS_RAW_URL="https://raw.githubusercontent.com/bats-core/bats-core"
 RUN=(run --separate-stderr)
 
 setup() {
-    true
+    [[ -n "$BATS_DELAY" ]] && sleep "$BATS_DELAY" || true
 }
 
 fetch() {
