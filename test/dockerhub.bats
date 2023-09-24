@@ -32,3 +32,9 @@ fetch() {
     [[ "${output}" =~ ^[0-9a-z]{20,}$ ]]
 }
 
+@test "fetch docker image digest for old version" {
+    "${RUN[@]}" fetch --version=1.8.2 --get-hash "$BATS_DOCKER_URL"
+    [ "$status" -eq 0 ]
+    [[ "${output}" == "e83f0ac8b0f3"* ]]
+}
+

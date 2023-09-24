@@ -1,7 +1,7 @@
 #!/bin/bash
 # Fetch - automatically retrieve the latest version / URL a repository release. 
 # https://github.com/niflostancu/release-fetch-script
-# v0.3
+# v0.3.90
 #
 # Prerequisites: bash curl jq
 #
@@ -26,28 +26,30 @@ print_help() {
 	echo -e "Fetches repository tag/asset/image version data and/or files.\n"
 	echo -e "The URL specifies the path to the repository & resource / asset to fetch."
 	echo -e "You can specify custom service-specific filters inside the URI fragment (e.g., '#prefix=v2.')"
-	echo -e "You may also use a special '{VERSION}' placeholder in some of its components."
+	echo -e "You may also use special placeholders (e.g., '{VERSION}', '{HASH}') in some of its components."
 	echo -e "A service may have limited supported functions (e.g., no download / hash). \n"
 	echo -e "Options:"
 	echo -e "	 --debug|-d: enable debug messages"
-	echo -e "	 --latest: fetch the latest version"
+	echo -e "	 --latest: always fetch the latest version (overrides cache)"
 	echo -e "	 --version=VERSION: fetch a specific version"
-	echo -e "	 --version-file=FILE: file to cache the version number for later use"
+	echo -e "	 --cache-file=FILE: file to cache the retrieved metadata vars"
 	echo -e "	 --header|-H EXTRA_HEADER: specify extra headers to curl (for version fetching & download)"
-	echo -e "	 --get-hash: retrieves the commit / asset's digest instead of version number"
+	echo -e "	 --print-version: prints the version number (the default, if no other --print* present)"
+	echo -e "	 --print-hash: prints the commit / asset's digest (multiple --print's are done in given order)"
 	echo -e "	 --print-url: prints the download URL"
 	echo -e "	 --download=DEST_NAME: uses curl to automatically download the asset to DEST_NAME"
 	echo -e "	 --self-update: self updates this script (fetches the latest version and replaces self with it)"
 	echo && exit 1
 }
 
-VERSION=
-VERSION_FILE=
-CURL_ARGS=()
-GET_URL=
-GET_HASH=
-SELF_UPDATE=
-DOWNLOAD_DEST=
+# runtime metadata vars + stores
+declare -g URL="" SERVICE="" CACHE_FILE="" FETCH_LATEST="" DOWNLOAD_DEST="" SELF_UPDATE=""
+declare -g -a OUTPUT=()
+declare -g -a CURL_ARGS=()
+declare -g -A USER_VARS=() META=() CACHE=()
+# available vars & dependencies
+declare -g -a METADATA_VARS=(version hash url)
+declare -g -A METADATA_DEPS=([hash]="version" [url]="")  # URL is dynamic
 
 # Script setup
 shopt -s expand_aliases
@@ -60,18 +62,26 @@ while [[ $# -gt 0 ]]; do
 	case "$1" in
 		--help|-h) print_help; ;;
 		--debug|-d) DEBUG=1; ;;
-		--latest) VERSION=__latest; ;;
-		--version|--version=*) _parse_optval && VERSION=$_OPT_VAL; ;;
-		--version-file|--version-file=*) _parse_optval && VERSION_FILE=$_OPT_VAL; ;;
+		--latest) USER_VARS["version"]="__fetch"; ;;
+		--version|--version=*) _parse_optval && USER_VARS["version"]="$_OPT_VAL"; ;;
+		--set-*) [[ "$1" =~ ^--set-(.+)(=.*)?$ ]] || _fatal "Invalid option: $1"
+			_parse_optval && USER_VARS["${BASH_REMATCH[1]}"]="$_OPT_VAL"; ;;
+		--cache-file|--version-file|--version-file=*) _parse_optval && CACHE_FILE="$_OPT_VAL"; ;;
 		--header|--header=*|-H) _parse_optval && CURL_ARGS+=(-H "$_OPT_VAL"); ;;
-		--get-hash) GET_HASH=1 ;;
-		--get-url|--print-url) GET_URL=1 ;;
+		--get-ver|--print-version|--print-ver) OUTPUT+=(version); ;;
+		--get-hash|--print-hash) OUTPUT+=(hash); ;;
+		--get-url|--print-url) OUTPUT+=(url); ;;
 		--download|--download=*) _parse_optval && DOWNLOAD_DEST=$_OPT_VAL; ;;
 		--self-update) SELF_UPDATE=1; break ;;
 		-*) _fatal "Invalid argument: $1" ;;
 		*) break ;;
 	esac
 	shift
+done
+# quick prerequisites check
+for program in jq curl sed; do
+	type "$program" >/dev/null || \
+		_fatal "$program not found (not installed or not in PATH)!"
 done
 
 # Supported services domains (used for URL detection)
@@ -80,7 +90,6 @@ declare -A SERVICES=(
 	["raw.githubusercontent.com"]="github_raw"
 	["hub.docker.com"]="docker_hub"
 )
-
 # Parses an URL fragment and returns each pair on a newline
 # (easy to iterate using `read -r line`)
 # Accepted format: #key1=value;key2=value...
@@ -94,108 +103,121 @@ function parse_url_fragment() {
 	fi || true
 }
 
-# Parses a github URL
+# Interpolates metadata '{VARIABLE}'s in a template string (usually, URLs)
+function replace_metadata() {
+	local rs="$1" var=
+	for var in "${METADATA_VARS[@]}"; do
+		# replace uppercased ${var} with its actual value
+		rs="${rs/{${var^^}\}/${META["$var"]}}"
+	done
+	echo -n "$rs"
+}
+
+# Parses a GitHub URL
 # Accepted formats:
 # - https://github.com/{org}/{repo}(/releases/download/{VERSION}/...)?
 # - https://github.com/{org}/{repo}(/archive/refs/tags/{VERSION}.(zip|tar.gz))?
 function service:github:parse_url() {
-	if [[ "$1" =~ ^https?://[^/]+/([^/]+/[^/]+)(/.+)? ]]; then
-		_REPONAME="${BASH_REMATCH[1]}"
-		_URL_REST="${BASH_REMATCH[2]#/}"
+	_GH_FULLREPO=""; _GH_URL_REST=""
+	if [[ "$1" =~ ^https?://[^/]+/([^/]+/[^/]+)([/#].*)?$ ]]; then
+		_GH_FULLREPO="${BASH_REMATCH[1]}"
+		_GH_URL_REST="${BASH_REMATCH[2]#/}"
 	else
 		_fatal "Unable to parse URL: $1"
 	fi
 }
-function service:github:get_version() {
-	local API_URL="https://api.github.com/repos/$_REPONAME/releases" 
-	local HASH= PREFIX= SUFFIX= line=
-	if [[ "$1" == "--hash" ]]; then
-		HASH=1; shift
-	fi
+function service:github:fetch_metadata() {
+	local FIELD="$1"
+	local API_URL="https://api.github.com/repos/$_GH_FULLREPO" 
+	local PREFIX= SUFFIX= line=
 	while IFS= read -r line; do
 		case $line in
 			prefix=*|pfx=*) PREFIX=${line#*=}; ;;
 			suffix=*|sfx=*) SUFFIX=${line#*=}; ;;
 		esac
-	done < <( parse_url_fragment "$1" )
-	local JQ_FILTERS="map(select(.prerelease==false)) | [.[].tag_name]"
-	[[ -z "$PREFIX" ]] || \
-		JQ_FILTERS+=" | map(select(tostring|startswith(\"$PREFIX\")))"
-	[[ -z "$SUFFIX" ]] || \
-		JQ_FILTERS+=" | map(select(tostring|endswith(\"$SUFFIX\")))"
-	JQ_FILTERS+=" | first"
-	_debug -2 "github:get_ver: curl:${CURL_ARGS[@]} $API_URL"
-	_debug -2 "github:get_ver: jq: $JQ_FILTERS"
-	local TAG=$(curl --fail --show-error --silent "${CURL_ARGS[@]}" "$API_URL" | jq -r "$JQ_FILTERS")
-	if [[ -n "$HASH" ]]; then
+	done < <( parse_url_fragment "$_GH_URL_REST" )
+	if [[ "$FIELD" == "version" ]]; then
+		API_URL+="/releases"
+		local JQ_FILTERS="map(select(.prerelease==false)) | [.[].tag_name]"
+		[[ -z "$PREFIX" ]] || \
+			JQ_FILTERS+=" | map(select(tostring|startswith(\"$PREFIX\")))"
+		[[ -z "$SUFFIX" ]] || \
+			JQ_FILTERS+=" | map(select(tostring|endswith(\"$SUFFIX\")))"
+		JQ_FILTERS+=" | first"
+		_debug -2 "github:fetch: curl:${CURL_ARGS[@]} $API_URL"
+		_debug -2 "github:fetch: jq: $JQ_FILTERS"
+		curl --fail --show-error --silent "${CURL_ARGS[@]}" "$API_URL" | jq -r "$JQ_FILTERS"
+	elif [[ "$FIELD" == "hash" ]]; then
 		# fetch commit SHA from the GH API
-		API_URL="https://api.github.com/repos/$_REPONAME/git/ref/tags/$TAG" 
+		API_URL+="/git/ref/tags/${META["version"]}" 
+		_debug -2 "github:fetch: curl:${CURL_ARGS[@]} $API_URL"
 		curl --fail --show-error --silent "${CURL_ARGS[@]}" "$API_URL" | jq -r ".object.sha[0:32]"
-	else
-		echo -n "$TAG"
-	fi
+	else _fatal "Metadata field supported: $FIELD"; fi
 }
-function service:github:get_download_url() {
-	echo -n "${1/{VERSION\}/$_VERSION}"
-}
+function service:github:get_download_url() { replace_metadata "$1"; }
 
 # Github Raw download URL parser
 # Accepted formats:
 # - https://raw.githubusercontent.com/{org}/{repository}/{VERSION}/...
 function service:github_raw:parse_url() { service:github:parse_url "$@"; }
-function service:github_raw:get_version() { service:github:get_version "$@"; }
-function service:github_raw:get_download_url() { service:github:get_download_url "$@"; }
+function service:github_raw:fetch_metadata() { service:github:fetch_metadata "$@"; }
+function service:github_raw:get_download_url() { replace_metadata "$1"; }
 
 # Docker Hub latest tag query (via API v2)
 # Accepted formats:
 # - https://hub.docker.com/_/{repo}/#filter={VERSION}
 # - https://hub.docker.com/(r|repository/docker)/{org}/{repo}/#filter={VERSION}
 function service:docker_hub:parse_url() {
-	if [[ "$1" =~ ^https?://[^/]+/_/([^/#]+)(/[^#]*)? ]]; then
+	# reset internal cache vars
+	_DH_NAMESPACE=""; _DH_REPONAME=""; _DH_URL_REST=""
+	if [[ "$1" =~ ^https?://[^/]+/_/([^/#]+)([/#].*)??$ ]]; then
 		# official library
-		_NAMESPACE=library
-		_REPONAME="${BASH_REMATCH[1]}"
-		_URL_REST="${BASH_REMATCH[2]#/}"
-	elif [[ "$1" =~ ^https?://[^/]+/(r|repository/docker)/([^/]+)/([^#/]+)(/[^#]*)? ]]; then
+		_DH_NAMESPACE=library
+		_DH_REPONAME="${BASH_REMATCH[1]}"
+		_DH_URL_REST="${BASH_REMATCH[2]#/}"
+	elif [[ "$1" =~ ^https?://[^/]+/(r|repository/docker)/([^#/]+)/([^#/]+)([/#].*)?$ ]]; then
 		# named project
-		_NAMESPACE="${BASH_REMATCH[2]}"
-		_REPONAME="${BASH_REMATCH[3]}"
-		_URL_REST="${BASH_REMATCH[4]#/}"
+		_DH_NAMESPACE="${BASH_REMATCH[2]}"
+		_DH_REPONAME="${BASH_REMATCH[3]}"
+		_DH_URL_REST="${BASH_REMATCH[4]#/}"
 	else
 		_fatal "Unable to parse URL: $1"
 	fi
 }
-function service:docker_hub:get_version() {
-	local API_URL="https://hub.docker.com/v2/namespaces/$_NAMESPACE/repositories/$_REPONAME/tags"
-	API_URL+="?page_size=100"
-	local HASH= PREFIX= SUFFIX= LONGEST= line=
-	if [[ "$1" == "--hash" ]]; then
-		HASH=1; shift
-	fi
+function service:docker_hub:fetch_metadata() {
+	local FIELD="$1"
+	local API_URL="https://hub.docker.com/v2/namespaces/$_DH_NAMESPACE/repositories/$_DH_REPONAME/tags"
+	local PREFIX= SUFFIX= LONGEST= line=
 	while IFS= read -r line; do
 		case "$line" in
 			prefix=*|pfx=*) PREFIX=${line#*=}; ;;
 			suffix=*|sfx=*) SUFFIX=${line#*=}; ;;
 			longest|long) LONGEST=1; ;;
 		esac
-	done < <( parse_url_fragment "$1" )
-	local JQ_FILTERS=".results | map(select(.name != \"latest\"))"
-	[[ -z "$PREFIX" ]] || \
-		JQ_FILTERS+=" | map(select(.name|tostring|startswith(\"$PREFIX\")))"
-	[[ -z "$SUFFIX" ]] || \
-		JQ_FILTERS+=" | map(select(.name|tostring|endswith(\"$SUFFIX\")))"
-	# sort by date, desc + name length, asc
-	local JQ_SORTBY=".last_updated"
-	[[ -z "$LONGEST" ]] || JQ_SORTBY+=", (100-(.name|length))"
-	JQ_FILTERS+=" | sort_by($JQ_SORTBY) | reverse | first"
-	if [[ -n "$HASH" ]]; then
-		# remove hash prefix from the digest value (e.g., 'sha256:...')
-		JQ_FILTERS+=" | .digest | sub(\".*:\"; \"\") | .[0:32]"
-	else
+	done < <( parse_url_fragment "$_DH_URL_REST" )
+	if [[ "$FIELD" == "version" ]]; then
+		API_URL+="?page_size=100"
+		local JQ_FILTERS=".results | map(select(.name != \"latest\"))"
+		[[ -z "$PREFIX" ]] || \
+			JQ_FILTERS+=" | map(select(.name|tostring|startswith(\"$PREFIX\")))"
+		[[ -z "$SUFFIX" ]] || \
+			JQ_FILTERS+=" | map(select(.name|tostring|endswith(\"$SUFFIX\")))"
+		# sort by date, desc + name length, asc
+		local JQ_SORTBY=".last_updated"
+		[[ -z "$LONGEST" ]] || JQ_SORTBY+=", (100-(.name|length))"
+		JQ_FILTERS+=" | sort_by($JQ_SORTBY) | reverse | first"
 		JQ_FILTERS+=" | .name"
-	fi
-	_debug -2 "docker_hub:get_ver: jq: $JQ_FILTERS"
-	curl --fail --show-error --silent "${CURL_ARGS[@]}" "$API_URL" | jq -r "$JQ_FILTERS"
+		_debug -2 "docker_hub:fetch: curl:${CURL_ARGS[@]} $API_URL"
+		_debug -2 "docker_hub:fetch: jq: $JQ_FILTERS"
+		curl --fail --show-error --silent "${CURL_ARGS[@]}" "$API_URL" | jq -r "$JQ_FILTERS"
+	elif [[ "$FIELD" == "hash" ]]; then
+		API_URL+="/${META["version"]}"
+		# remove hash prefix from the digest value (e.g., 'sha256:...')
+		local JQ_FILTERS=".digest | sub(\".*:\"; \"\") | .[0:32]"
+		_debug -2 "docker_hub:fetch: curl:${CURL_ARGS[@]} $API_URL"
+		_debug -2 "docker_hub:fetch: jq: $JQ_FILTERS"
+		curl --fail --show-error --silent "${CURL_ARGS[@]}" "$API_URL" | jq -r "$JQ_FILTERS"
+	else _fatal "Metadata field supported: $FIELD"; fi
 }
 function service:docker_hub:get_download_url() {
 	_fatal "Docker Hub download not supported!"
@@ -205,70 +227,113 @@ function service:docker_hub:get_download_url() {
 # (for out-of-tree usage of the fetch.sh script)
 function fetch_self_update() {
 	URL="https://raw.githubusercontent.com/niflostancu/release-fetch-script/{VERSION}/fetch.sh"
-	VERSION=${VERSION:-__latest}
+	[[ -n "${USER_VARS[version]}" ]] || USER_VARS["version"]=__fetch
 }
 
-if ! type jq > /dev/null; then
-	_fatal "jq not found (not installed or not in PATH)!"
-fi
+# Requests / fetches missing metadata variables ($@) to be available in the
+# META[@] associative array (if not already).
+function request_metadata() {
+	local var= dep_for=
+	if [[ "$1" == "--for="* ]]; then _parse_optval && dep_for="$_OPT_VAL"; shift; fi
+	for var in "$@"; do
+		[[ -z "${META["$var"]}" ]] || continue
+		# fetch dependencies first
+		[[ -z "${METADATA_DEPS[$var]}" ]] || request_metadata --for="$var" ${METADATA_DEPS[$var]}
+		local value=
+		if [[ -n "${USER_VARS["$var"]}" ]]; then  # invalidate dependency source
+			[[ -z "$dep_for" || -n "${USER_VARS[$dep_for]}" ]] || USER_VARS["$dep_for"]="__fetch"
+		fi
+		if [[ "$var" == "url" ]]; then # URL is a special variable
+			value="$(service:$SERVICE:get_download_url "$URL")"
+		elif [[ "${USER_VARS[$var]}" == "__fetch" ]]; then
+			value="$(service:$SERVICE:fetch_metadata "$var")";
+		elif [[ -n "${USER_VARS["$var"]}" ]]; then value="${USER_VARS[$var]}"
+		elif [[ -n "${CACHE["$var"]}" ]]; then value="${CACHE[$var]}"
+		else value="$(service:$SERVICE:fetch_metadata "$var")"; fi
+		if [[ -z "$value" ]]; then _fatal "Could not determine $var"; fi
+		META["$var"]="$value"
+	done
+}
 
+# tries to read the required metadata from cache;
+# results are stored in the global CACHE associative array!
+function read_cached_metadata() {
+	[[ -f "$1" ]] || return 1
+	local idx=0 line=
+	while IFS="" read -r line; do
+		local var="${METADATA_VARS[$idx]}"
+		[[ -n "$var" ]] || break
+		# remove trailing whitespace
+		line="${line%"${line##*[![:space:]]}"}"
+		CACHE["$var"]=$line
+		idx=$(( $idx + 1 ))
+	done <"$1"
+}
+
+# caches the retrieved metadata to a file (if they are different from CACHE)
+function cache_metadata() {
+	local CACHE_FILE="$1"
+	_debug -2 "cache: file: '$CACHE_FILE'"
+	local NEW_CONTENTS= var=
+	for var in "${METADATA_VARS[@]}"; do
+		NEW_CONTENTS+="${META["$var"]}"$'\n'
+	done
+	# prevent unneeded modification (e.g., to keep makefiles from re-building)
+	local CUR_CONTENTS=
+	[[ ! -f "$CACHE_FILE" ]] || CUR_CONTENTS=$(cat "$CACHE_FILE")
+	if [[ "$CUR_CONTENTS" != "$NEW_CONTENTS" ]]; then
+		mkdir -p "$(dirname "$CACHE_FILE")"
+		echo -n "$NEW_CONTENTS" > "$CACHE_FILE"
+		_debug "cache: saved metadata to file!"
+	else
+		_debug -2 "cache: has identical content"
+	fi
+}
+
+# a little post-args processing for default value inference
 URL="$1"
-
 if [[ -n "$SELF_UPDATE" ]]; then fetch_self_update; fi
+if [[ ${#OUTPUT[@]} -le 0 ]]; then OUTPUT+=(version); fi
 
+# begin with URL parsing and service auto-detection
+# (TODO: provide option to override)
 SERVICE=$(echo "$URL" | sed -e 's/[^/]*\/\/\([^@]*@\)\?\([^:/]*\).*/\2/')
 if [[ ! -v SERVICES["$SERVICE"] ]]; then
 	_fatal "Service $SERVICE not supported!" >&2
 fi
 SERVICE=${SERVICES["$SERVICE"]}
 
+# call service-specific URL parser hook
 service:$SERVICE:parse_url "$URL"
+[[ -z "$CACHE_FILE" ]] || read_cached_metadata "$CACHE_FILE" || \
+	_debug "cache: not found"
+# fetch the required metadata variables (plus dependencies)
+declare -a REQUEST_VARS=()
+for _var in "${METADATA_VARS[@]}"; do
+	[[ "$URL" == *"{${_var^^}}"* ]] && METADATA_DEPS[url]+="$_var " || true
+	[[ " ${OUTPUT[*]} " =~ " $_var " ]] && REQUEST_VARS+=("$_var") || true
+done
+[[ -z "$DOWNLOAD_DEST" ]] || REQUEST_VARS+=(url)
+request_metadata "${REQUEST_VARS[@]}"
 
-# check if we need to retrieve the latest version
-_debug "Version File: $VERSION_FILE"
-_VERSION="$VERSION"
-_GET_VERSION_ARGS=()
-if [[ -z "$_VERSION" && -n "$VERSION_FILE" && -f "$VERSION_FILE" ]]; then
-	_VERSION="$(cat "$VERSION_FILE" | head -1)"
-	_debug "version: found in file: $_VERSION"
-fi
-if [[ -z "$_VERSION" || "$_VERSION" == "__latest" ]]; then
-	[[ -z "$GET_HASH" ]] || _GET_VERSION_ARGS=(--hash)
-	_VERSION=$(service:$SERVICE:get_version "${_GET_VERSION_ARGS[@]}" "$URL")
-	[[ -n "$_VERSION" ]] || _fatal "Could not determine a version for '$_NAME'" >&2
-	_debug "version: retrieved from service: $_VERSION"
-fi
+# print the requested output metadata
+_debug "output: ${OUTPUT[*]}"
+for out_field in "${OUTPUT[@]}"; do
+	[[ " ${METADATA_VARS[*]} " =~ " $out_field " ]] || \
+		_fatal "Unknown output field: $out_field"
+	echo "${META["$out_field"]}"
+done
 
-if [[ "$GET_URL" == "1" ]]; then
-	DOWNLOAD_URL="$(service:$SERVICE:get_download_url "$URL")"
-	echo "$DOWNLOAD_URL"
-else
-	echo "$_VERSION"
-fi
-
-# Caches the retrieved version / metadata to a file
-function cache_version() {
-	[[ -n "$VERSION_FILE" ]] || return 0
-	# prevent unneeded modification to keep makefile from re-building
-	local _CONTENTS=
-	[[ ! -f "$VERSION_FILE" ]] || _CONTENTS=$(cat "$VERSION_FILE" | head -1)
-	if [[ "$_CONTENTS" != "$1" ]]; then
-		mkdir -p "$(dirname "$VERSION_FILE")"
-		echo "$1" > "$VERSION_FILE"
-		_debug "version: cached '$1' to file!"
-	fi
-}
-
-_debug "Download dest: $DOWNLOAD_DEST"
+# finally, download file(s), if requested
 if [[ -n "$DOWNLOAD_DEST" ]]; then
-	DOWNLOAD_URL="$(service:$SERVICE:get_download_url "$URL")"
+	DOWNLOAD_URL="${META["url"]}"
 	_debug "downloading $DOWNLOAD_URL to '$DOWNLOAD_DEST'"
 	mkdir -p "$(dirname "$DOWNLOAD_DEST")"
 	_debug -2 "download: curl:${CURL_ARGS[@]} -L -o $DOWNLOAD_DEST $DOWNLOAD_URL"
 	curl --fail --show-error --silent "${CURL_ARGS[@]}" -L -o "$DOWNLOAD_DEST" "$DOWNLOAD_URL"
-	cache_version "$_VERSION"
 	echo "$DOWNLOAD_DEST"
-else
-	cache_version "$_VERSION"
 fi
+
+# if everything went well this far, save the metadata file
+[[ -z "$CACHE_FILE" ]] || cache_metadata "$CACHE_FILE"
 

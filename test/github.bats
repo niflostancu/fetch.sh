@@ -60,7 +60,7 @@ fetch() {
     "${RUN[@]}" fetch --latest --version-file="$_CACHE" "$BATS_URL/archive/refs/tags/{VERSION}.tar.gz"
     "${RUN[@]}" fetch --version-file="$_CACHE" --print-url "$BATS_URL/archive/refs/tags/{VERSION}.tar.gz"
     [ "$status" -eq 0 ]
-    local VERSION=$(cat "$_CACHE")
+    local VERSION=$(head -1 "$_CACHE")
     [[ "${output}" =~ "$BATS_URL/archive/refs/tags/$VERSION.tar.gz" ]]
 }
 
