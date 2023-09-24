@@ -10,13 +10,15 @@ DELAY?=1
 TEST_BATS_ARGS?= --jobs 1 --print-output-on-failure --formatter pretty
 TEST_BATS_ARGS+=$(if $(V),--show-output-of-passing-tests --verbose-run)
 
+s=$(if $(V),,@)
+
 help:
 	@echo "Available targets:"
 	@echo "	 test 	Runs all tests using bats."
 
 .PHONY: test
 test:
-	docker build -q -t "$(TEST_BATS_IMAGE)" test/
-	$(DOCKER) run -it -v "$$(pwd):/code:ro" -e "DEBUG=$(DEBUG)" -e BATS_DELAY=$(DELAY) \
+	$(s)docker build $(if $(V),,-q) -t "$(TEST_BATS_IMAGE)" test/
+	$(s)$(DOCKER) run -it -v "$$(pwd):/code:ro" -e "DEBUG=$(DEBUG)" -e BATS_DELAY=$(DELAY) \
 		"$(TEST_BATS_IMAGE)" $(TEST_BATS_ARGS) /code/test/
 
