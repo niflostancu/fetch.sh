@@ -113,6 +113,18 @@ function replace_metadata() {
 	echo -n "$rs"
 }
 
+# Calls curl with default arguments.
+curl:fetch() { _debug -2 "curl ${CURL_ARGS[*]} $*";
+	curl --fail --show-error --silent "${CURL_ARGS[@]}" "$@"; }
+# JQ utilities for building filters
+jq:filter:prefix() { [[ -z "$1" ]] || echo "map(select(${2:+$2"|"}tostring|startswith(\"$1\")))"; }
+jq:filter:suffix() { [[ -z "$1" ]] || echo "map(select(${2:+$2"|"}tostring|endswith(\"$1\")))"; }
+jq:sortby() { local acc=;
+	for v in "$@"; do [[ -z "$v" ]] || acc+="${acc:+", "}$v"; done;
+	echo "${acc:+sort_by($acc)}"; }
+jq:join_pipe() { local -n ref="$1"; shift; for v in "$@"; do [[ -z "$v" ]] || ref="${ref:+"$ref | "}$v"; done; }
+jq:run() { _debug -2 "jq -r $*"; jq -r "$*"; }
+
 # Parses a GitHub URL
 # Accepted formats:
 # - https://github.com/{org}/{repo}(/releases/download/{VERSION}/...)?
@@ -129,7 +141,7 @@ function service:github:parse_url() {
 function service:github:fetch_metadata() {
 	local FIELD="$1"
 	local API_URL="https://api.github.com/repos/$_GH_FULLREPO" 
-	local PREFIX= SUFFIX= line=
+	local PREFIX= SUFFIX= line= JQ_FILTERS=
 	while IFS= read -r line; do
 		case $line in
 			prefix=*|pfx=*) PREFIX=${line#*=}; ;;
@@ -138,20 +150,14 @@ function service:github:fetch_metadata() {
 	done < <( parse_url_fragment "$_GH_URL_REST" )
 	if [[ "$FIELD" == "version" ]]; then
 		API_URL+="/releases"
-		local JQ_FILTERS="map(select(.prerelease==false)) | [.[].tag_name]"
-		[[ -z "$PREFIX" ]] || \
-			JQ_FILTERS+=" | map(select(tostring|startswith(\"$PREFIX\")))"
-		[[ -z "$SUFFIX" ]] || \
-			JQ_FILTERS+=" | map(select(tostring|endswith(\"$SUFFIX\")))"
-		JQ_FILTERS+=" | first"
-		_debug -2 "github:fetch: curl:${CURL_ARGS[@]} $API_URL"
-		_debug -2 "github:fetch: jq: $JQ_FILTERS"
-		curl --fail --show-error --silent "${CURL_ARGS[@]}" "$API_URL" | jq -r "$JQ_FILTERS"
+		jq:join_pipe JQ_FILTERS 'map(select(.prerelease==false))' '[.[].tag_name]'
+		jq:join_pipe JQ_FILTERS "$(jq:filter:prefix "$PREFIX")" "$(jq:filter:suffix "$SUFFIX")"
+		jq:join_pipe JQ_FILTERS 'first'
+		curl:fetch "$API_URL" | jq -r "$JQ_FILTERS" ## jq:run "$JQ_FILTERS"
 	elif [[ "$FIELD" == "hash" ]]; then
 		# fetch commit SHA from the GH API
 		API_URL+="/git/ref/tags/${META["version"]}" 
-		_debug -2 "github:fetch: curl:${CURL_ARGS[@]} $API_URL"
-		curl --fail --show-error --silent "${CURL_ARGS[@]}" "$API_URL" | jq -r ".object.sha[0:32]"
+		curl:fetch "$API_URL" | jq:run ".object.sha"
 	else _fatal "Metadata field supported: $FIELD"; fi
 }
 function service:github:get_download_url() { replace_metadata "$1"; }
@@ -187,36 +193,28 @@ function service:docker_hub:parse_url() {
 function service:docker_hub:fetch_metadata() {
 	local FIELD="$1"
 	local API_URL="https://hub.docker.com/v2/namespaces/$_DH_NAMESPACE/repositories/$_DH_REPONAME/tags"
-	local PREFIX= SUFFIX= LONGEST= line=
+	local PREFIX= SUFFIX= LONGEST= line= PAGE_SIZE= JQ_FILTERS=
 	while IFS= read -r line; do
 		case "$line" in
 			prefix=*|pfx=*) PREFIX=${line#*=}; ;;
 			suffix=*|sfx=*) SUFFIX=${line#*=}; ;;
+			page_size=*|max_count=*) PAGE_SIZE=${line#*=}; ;;
 			longest|long) LONGEST=1; ;;
 		esac
 	done < <( parse_url_fragment "$_DH_URL_REST" )
 	if [[ "$FIELD" == "version" ]]; then
-		API_URL+="?page_size=100"
-		local JQ_FILTERS=".results | map(select(.name != \"latest\"))"
-		[[ -z "$PREFIX" ]] || \
-			JQ_FILTERS+=" | map(select(.name|tostring|startswith(\"$PREFIX\")))"
-		[[ -z "$SUFFIX" ]] || \
-			JQ_FILTERS+=" | map(select(.name|tostring|endswith(\"$SUFFIX\")))"
-		# sort by date, desc + name length, asc
-		local JQ_SORTBY=".last_updated"
-		[[ -z "$LONGEST" ]] || JQ_SORTBY+=", (100-(.name|length))"
-		JQ_FILTERS+=" | sort_by($JQ_SORTBY) | reverse | first"
-		JQ_FILTERS+=" | .name"
-		_debug -2 "docker_hub:fetch: curl:${CURL_ARGS[@]} $API_URL"
-		_debug -2 "docker_hub:fetch: jq: $JQ_FILTERS"
-		curl --fail --show-error --silent "${CURL_ARGS[@]}" "$API_URL" | jq -r "$JQ_FILTERS"
+		API_URL+="?page_size=${PAGE_SIZE:-100}"
+		jq:join_pipe JQ_FILTERS '.results' 'map(select(.name != "latest"))' \
+			"$(jq:filter:prefix "$PREFIX" '.name')" "$(jq:filter:suffix "$SUFFIX" '.name')"
+		# sort by date desc, longest prefix first (optional)
+		local JQ_SORTBY="$(jq:sortby '.last_updated' "${LONGEST:+"(100-(.name|length))"}")"
+		jq:join_pipe JQ_FILTERS "$JQ_SORTBY" "reverse" "first" ".name"
+		curl:fetch "$API_URL" | jq:run "$JQ_FILTERS"
 	elif [[ "$FIELD" == "hash" ]]; then
 		API_URL+="/${META["version"]}"
 		# remove hash prefix from the digest value (e.g., 'sha256:...')
-		local JQ_FILTERS=".digest | sub(\".*:\"; \"\") | .[0:32]"
-		_debug -2 "docker_hub:fetch: curl:${CURL_ARGS[@]} $API_URL"
-		_debug -2 "docker_hub:fetch: jq: $JQ_FILTERS"
-		curl --fail --show-error --silent "${CURL_ARGS[@]}" "$API_URL" | jq -r "$JQ_FILTERS"
+		jq:join_pipe JQ_FILTERS '.digest' 'sub(".*:"; "")'
+		curl:fetch "$API_URL" | jq:run "$JQ_FILTERS"
 	else _fatal "Metadata field supported: $FIELD"; fi
 }
 function service:docker_hub:get_download_url() {

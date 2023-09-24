@@ -45,6 +45,12 @@ fetch() {
     [[ "${output}" =~ ^[0-9a-z]{20,}$ ]]
 }
 
+@test "fetch specific commit digest" {
+    "${RUN[@]}" fetch --version=v1.8.0 --get-hash "$BATS_URL"
+    [ "$status" -eq 0 ]
+    [[ "${output}" == "dbe636ed7ea9"* ]]
+}
+
 @test "cache version to file" {
     _CACHE=/tmp/test_ver_cache
     rm -f "$_CACHE"
