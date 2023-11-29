@@ -42,9 +42,10 @@ Options:
          --debug|-d: enable debug messages
          --latest: fetch the latest version
          --version=VERSION: fetch a specific version
-         --version-file=FILE: file to cache the version number for later use
+         --cache-file=FILE: file to cache the retrieved metadata vars
          --header|-H EXTRA_HEADER: specify extra headers to curl (for version fetching & download)
-         --get-hash: retrieves the commit / asset's digest instead of version number
+         --print-version: prints the version number (the default, if no other --print* present)
+         --print-hash: prints the commit / asset's digest (multiple --print's are done in given order)
          --print-url: prints the download URL
          --download=DEST_NAME: uses curl to automatically download the asset to DEST_NAME
          --self-update: self updates this script (fetches the latest version and replaces self with it)
