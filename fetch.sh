@@ -30,8 +30,10 @@ print_help() {
 	echo -e "A service may have limited supported functions (e.g., no download / hash). \n"
 	echo -e "Options:"
 	echo -e "	 --debug|-d: enable debug messages"
+	echo -e "	 --version: prints the local fetch script's version string"
 	echo -e "	 --latest: always fetch the latest version (overrides cache)"
-	echo -e "	 --version=VERSION: fetch a specific version"
+	echo -e "	 --set-version=VERSION: fetch a specific version / commit string"
+	echo -e "	 --set-*[=VALUE]: set configuration variables (alt. to fragment vars)"
 	echo -e "	 --cache-file=FILE: file to cache the retrieved metadata vars"
 	echo -e "	 --header|-H EXTRA_HEADER: specify extra headers to curl (for version fetching & download)"
 	echo -e "	 --print-version: prints the version number (the default, if no other --print* present)"
@@ -62,11 +64,12 @@ while [[ $# -gt 0 ]]; do
 	case "$1" in
 		--help|-h) print_help; ;;
 		--debug|-d) DEBUG=1; ;;
+		--version) SCRIPT_VERSION="$(cat "$0" | grep -E '# v[0-9.]+.*' | head -1)"; echo "${SCRIPT_VERSION##'# '}"; exit 0; ;;
 		--latest) USER_VARS["version"]="__fetch"; ;;
-		--version|--version=*) _parse_optval && USER_VARS["version"]="$_OPT_VAL"; ;;
-		--set-*) [[ "$1" =~ ^--set-(.+)(=.*)?$ ]] || _fatal "Invalid option: $1"
+		--set-*) [[ "$1" =~ ^--set-([^=]+)(=.*)?$ ]] || _fatal "Invalid option: $1"
 			_parse_optval && USER_VARS["${BASH_REMATCH[1]}"]="$_OPT_VAL"; ;;
-		--cache-file|--version-file|--version-file=*) _parse_optval && CACHE_FILE="$_OPT_VAL"; ;;
+		--cache-file|--cache-file=*|--version-file|--version-file=*)
+			_parse_optval && CACHE_FILE="$_OPT_VAL"; ;;
 		--header|--header=*|-H) _parse_optval && CURL_ARGS+=(-H "$_OPT_VAL"); ;;
 		--get-ver|--print-version|--print-ver) OUTPUT+=(version); ;;
 		--get-hash|--print-hash) OUTPUT+=(hash); ;;
@@ -139,21 +142,24 @@ function service:github:parse_url() {
 	fi
 }
 function service:github:fetch_metadata() {
-	local FIELD="$1"
+	local FIELD="$1" line= JQ_FILTERS=
 	local API_URL="https://api.github.com/repos/$_GH_FULLREPO" 
-	local PREFIX= SUFFIX= line= JQ_FILTERS=
+	local PREFIX="${USER_VARS[prefix]}" SUFFIX="${USER_VARS[suffix]}"
+	local PRERELEASE=${USER_VARS[prerelease]}
 	while IFS= read -r line; do
 		case $line in
 			prefix=*|pfx=*) PREFIX=${line#*=}; ;;
 			suffix=*|sfx=*) SUFFIX=${line#*=}; ;;
+			prerelease|pre) PRERELEASE=1; ;;
 		esac
 	done < <( parse_url_fragment "$_GH_URL_REST" )
 	if [[ "$FIELD" == "version" ]]; then
 		API_URL+="/releases"
-		jq:join_pipe JQ_FILTERS 'map(select(.prerelease==false))' '[.[].tag_name]'
+		[[ -n "$PRERELEASE" ]] || jq:join_pipe JQ_FILTERS 'map(select(.prerelease==false))'
+		jq:join_pipe JQ_FILTERS '[.[].tag_name]'
 		jq:join_pipe JQ_FILTERS "$(jq:filter:prefix "$PREFIX")" "$(jq:filter:suffix "$SUFFIX")"
 		jq:join_pipe JQ_FILTERS 'first'
-		curl:fetch "$API_URL" | jq -r "$JQ_FILTERS" ## jq:run "$JQ_FILTERS"
+		curl:fetch "$API_URL" | jq:run "$JQ_FILTERS"
 	elif [[ "$FIELD" == "hash" ]]; then
 		# fetch commit SHA from the GH API
 		API_URL+="/git/ref/tags/${META["version"]}" 
@@ -191,9 +197,10 @@ function service:docker_hub:parse_url() {
 	fi
 }
 function service:docker_hub:fetch_metadata() {
-	local FIELD="$1"
+	local FIELD="$1" line= JQ_FILTERS=
 	local API_URL="https://hub.docker.com/v2/namespaces/$_DH_NAMESPACE/repositories/$_DH_REPONAME/tags"
-	local PREFIX= SUFFIX= LONGEST= line= PAGE_SIZE= JQ_FILTERS=
+	local LONGEST="${USER_VARS[longest]}" PAGE_SIZE="${USER_VARS[page_size]}"
+	local PREFIX="${USER_VARS[prefix]}" SUFFIX="${USER_VARS[suffix]}"
 	while IFS= read -r line; do
 		case "$line" in
 			prefix=*|pfx=*) PREFIX=${line#*=}; ;;

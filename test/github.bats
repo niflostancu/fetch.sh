@@ -39,6 +39,12 @@ fetch() {
     [[ "${output}" == "v1.0.2" ]]
 }
 
+@test "fetch specific version prefix (using --set-prefix)" {
+    "${RUN[@]}" fetch --set-prefix=v1.0 "$BATS_URL/archive/refs/tags/{VERSION}.tar.gz"
+    [ "$status" -eq 0 ]
+    [[ "${output}" == "v1.0.2" ]]
+}
+
 @test "fetch latest commit digest" {
     "${RUN[@]}" fetch --latest --get-hash "$BATS_URL"
     [ "$status" -eq 0 ]
@@ -46,7 +52,7 @@ fetch() {
 }
 
 @test "fetch specific commit digest" {
-    "${RUN[@]}" fetch --version=v1.8.0 --get-hash "$BATS_URL"
+    "${RUN[@]}" fetch --set-version=v1.8.0 --get-hash "$BATS_URL"
     [ "$status" -eq 0 ]
     [[ "${output}" == "dbe636ed7ea9"* ]]
 }
@@ -54,7 +60,7 @@ fetch() {
 @test "cache version to file" {
     _CACHE=/tmp/test_ver_cache
     rm -f "$_CACHE"
-    "${RUN[@]}" fetch --latest --version-file="$_CACHE" "$BATS_URL"
+    "${RUN[@]}" fetch --latest --cache-file="$_CACHE" "$BATS_URL"
     [ "$status" -eq 0 ]
     [[ -f "$_CACHE" ]]
     [[ "$(head -1 "$_CACHE")" =~ ^v[1-9]+\. ]]
@@ -63,8 +69,8 @@ fetch() {
 @test "get download URL for cached version" {
     _CACHE=/tmp/test_ver_cache
     rm -f "$_CACHE"
-    "${RUN[@]}" fetch --latest --version-file="$_CACHE" "$BATS_URL/archive/refs/tags/{VERSION}.tar.gz"
-    "${RUN[@]}" fetch --version-file="$_CACHE" --print-url "$BATS_URL/archive/refs/tags/{VERSION}.tar.gz"
+    "${RUN[@]}" fetch --latest --cache-file="$_CACHE" "$BATS_URL/archive/refs/tags/{VERSION}.tar.gz"
+    "${RUN[@]}" fetch --cache-file="$_CACHE" --print-url "$BATS_URL/archive/refs/tags/{VERSION}.tar.gz"
     [ "$status" -eq 0 ]
     local VERSION=$(head -1 "$_CACHE")
     [[ "${output}" =~ "$BATS_URL/archive/refs/tags/$VERSION.tar.gz" ]]

@@ -26,6 +26,12 @@ fetch() {
     [[ "${output}" =~ ^v1\..+no-faccessat2 ]]
 }
 
+@test "fetch specific docker tag with prefix/suffix (using --set-*)" {
+    "${RUN[@]}" fetch --set-prefix="v1." --set-suffix="no-faccessat2" "$BATS_DOCKER_URL"
+    [ "$status" -eq 0 ]
+    [[ "${output}" =~ ^v1\..+no-faccessat2 ]]
+}
+
 @test "fetch docker image digest" {
     "${RUN[@]}" fetch --get-hash "$BATS_DOCKER_URL"
     [ "$status" -eq 0 ]
@@ -33,7 +39,7 @@ fetch() {
 }
 
 @test "fetch docker image digest for old version" {
-    "${RUN[@]}" fetch --version=1.8.2 --get-hash "$BATS_DOCKER_URL"
+    "${RUN[@]}" fetch --set-version=1.8.2 --get-hash "$BATS_DOCKER_URL"
     [ "$status" -eq 0 ]
     [[ "${output}" == "e83f0ac8b0f3"* ]]
 }

@@ -40,8 +40,10 @@ A service may have limited supported functions (e.g., no download / hash).
 
 Options:
          --debug|-d: enable debug messages
-         --latest: fetch the latest version
-         --version=VERSION: fetch a specific version
+         --version: prints the local fetch script's version string
+         --latest: always fetch the latest version (overrides cache)
+         --set-version=VERSION: fetch a specific version / commit string
+         --set-*[=VALUE]: set configuration variables (alt. to fragment vars)
          --cache-file=FILE: file to cache the retrieved metadata vars
          --header|-H EXTRA_HEADER: specify extra headers to curl (for version fetching & download)
          --print-version: prints the version number (the default, if no other --print* present)
