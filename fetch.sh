@@ -75,7 +75,7 @@ while [[ $# -gt 0 ]]; do
 		--get-hash|--print-hash) OUTPUT+=(hash); ;;
 		--get-url|--print-url) OUTPUT+=(url); ;;
 		--download|--download=*) _parse_optval && DOWNLOAD_DEST=$_OPT_VAL; ;;
-		--self-update) SELF_UPDATE=1; break ;;
+		--self-update) SELF_UPDATE=1 ;;
 		-*) _fatal "Invalid argument: $1" ;;
 		*) break ;;
 	esac
@@ -232,6 +232,7 @@ function service:docker_hub:get_download_url() {
 # (for out-of-tree usage of the fetch.sh script)
 function fetch_self_update() {
 	URL="https://raw.githubusercontent.com/niflostancu/release-fetch-script/{VERSION}/fetch.sh"
+	DOWNLOAD_DEST="$0"
 	[[ -n "${USER_VARS[version]}" ]] || USER_VARS["version"]=__fetch
 }
 

@@ -23,7 +23,12 @@ You should install them using your distribution's package manager.
 ## Installation
 
 Download the script and put it in PATH or somewhere in your project's scripts directory (where you
-intend to make use of it).
+intend to make use of it):
+
+```sh
+wget -O fetch.sh "https://raw.githubusercontent.com/niflostancu/release-fetch-script/master/fetch.sh"
+chmod +x fetch.sh
+```
 
 ## Usage
 
