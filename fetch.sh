@@ -120,7 +120,7 @@ curl:fetch() { _debug -2 "curl ${CURL_ARGS[*]} $*";
 jq:filter:prefix() { [[ -z "$1" ]] || echo "map(select(${2:+$2"|"}tostring|startswith(\"$1\")))"; }
 jq:filter:suffix() { [[ -z "$1" ]] || echo "map(select(${2:+$2"|"}tostring|endswith(\"$1\")))"; }
 jq:sortby() { local acc=;
-	for v in "$@"; do [[ -z "$v" ]] || acc+="${acc:+", "}$v"; done;
+	for v in "$@"; do [[ -z "$v" ]] || acc+="${acc:+", "}$v"; done
 	echo "${acc:+sort_by($acc)}"; }
 jq:join_pipe() { local -n ref="$1"; shift; for v in "$@"; do [[ -z "$v" ]] || ref="${ref:+"$ref | "}$v"; done; }
 jq:run() { _debug -2 "jq -r $*"; jq -r "$*"; }
