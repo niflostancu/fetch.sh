@@ -1,7 +1,7 @@
 #!/bin/bash
 # Fetch - automatically retrieve the latest version / URL a repository release. 
 # https://github.com/niflostancu/release-fetch-script
-# v0.3.90
+# v0.2.90
 #
 # Prerequisites: bash curl jq
 #
