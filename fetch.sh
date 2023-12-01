@@ -111,7 +111,7 @@ function replace_metadata() {
 	local rs="$1" var=
 	for var in "${METADATA_VARS[@]}"; do
 		# replace uppercased ${var} with its actual value
-		rs="${rs/{${var^^}\}/${META["$var"]}}"
+		rs="${rs//{${var^^}\}/${META["$var"]}}"
 	done
 	echo -n "$rs"
 }
@@ -333,6 +333,7 @@ done
 # finally, download file(s), if requested
 if [[ -n "$DOWNLOAD_DEST" ]]; then
 	DOWNLOAD_URL="${META["url"]}"
+	DOWNLOAD_DEST=$(replace_metadata "$DOWNLOAD_DEST")
 	_debug "downloading $DOWNLOAD_URL to '$DOWNLOAD_DEST'"
 	mkdir -p "$(dirname "$DOWNLOAD_DEST")"
 	_debug -2 "download: curl:${CURL_ARGS[@]} -L -o $DOWNLOAD_DEST $DOWNLOAD_URL"
