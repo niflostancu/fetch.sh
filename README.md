@@ -58,3 +58,48 @@ Options:
          --self-update: self updates this script (fetches the latest version and replaces self with it)
 ```
 
+### Examples
+
+Fetch latest [`fzf`](https://github.com/junegunn/fzf) release for `linux_amd64`:
+```sh
+fetch.sh --latest --download="fzf-{VERSION}.tar.gz" \
+    "https://github.com/junegunn/fzf/releases/download/{VERSION}/fzf-{VERSION}-linux_amd64.tar.gz"
+```
+
+Retrieve the version & URL of Kubernetes' [`nginx-controller`] deployment script
+(on multiple lines, in the order given by the arguments):
+```sh
+# this project has prefixed releases as version string, e.g.: "controller-v1.8.2"
+URL="https://raw.githubusercontent.com/kubernetes/ingress-nginx/{VERSION}/deploy/static/provider/cloud/deploy.yaml"
+fetch.sh --print-version --print-url --set-prefix="controller-" "$URL"
+# or:
+fetch.sh --print-version --print-url "$URL#prefix=controller-"
+```
+
+Of course, you can add `--download=<DEST_NAME>` at any time you also wish to
+download the file! But you can also cache those in a separate file (this is
+useful when using `fetch.sh` for Makefile dependency management):
+```sh
+fetch.sh --cache-file=.cached.ver --print-hash "$URL#..."
+cat .cached.ver
+# e.g.: "controller-v1.8.2" + commit hash on second line
+```
+
+For **DockerHub images**, there is no download capability (you use the container
+deployment tool). But it's always useful to check whether a given base image has
+a new version:
+
+```sh
+fetch.sh --print-version --print-hash "https://hub.docker.com/_/alpine"
+```
+
+You can also use `suffix` and `prefix` and `longest` (to prefer the longest
+version string) specifiers! + _Note_: when the image has many
+tags, it is useful to also set a larger `page_size` parameter (max. number of
+entries returned by the request), otherwise the returned version may not be the
+last (the API doesn't guarantee results ordering): 
+
+```sh
+fetch.sh --print-version "https://hub.docker.com/_/nextcloud#prefix=27.;suffix=-fpm-alpine;longest;page_size=200"
+```
+
