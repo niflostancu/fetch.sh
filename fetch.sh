@@ -47,7 +47,7 @@ print_help() {
 # runtime metadata vars + stores
 declare -g URL="" SERVICE="" CACHE_FILE="" FETCH_LATEST="" DOWNLOAD_DEST="" SELF_UPDATE=""
 declare -g -a OUTPUT=()
-declare -g -a CURL_ARGS=()
+declare -g -a CURL_ARGS=(-L)
 declare -g -A USER_VARS=() META=() CACHE=()
 # available vars & dependencies
 declare -g -a METADATA_VARS=(version hash url)
