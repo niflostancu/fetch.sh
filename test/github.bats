@@ -4,6 +4,7 @@ bats_require_minimum_version 1.5.0
 
 BATS_URL="https://github.com/bats-core/bats-core"
 BATS_RAW_URL="https://raw.githubusercontent.com/bats-core/bats-core"
+FETCH_RAW_TEST="https://github.com/niflostancu/fetch.sh/refs/heads/{VERSION}/fetch.sh"
 
 RUN=(run --separate-stderr)
 
@@ -16,7 +17,7 @@ fetch() {
 }
 
 @test "fetch help" {
-    "${RUN[@]}" fetch # https://github.com/bats-core/bats-core
+    "${RUN[@]}" fetch
     [ "$status" -eq 1 ]
     [[ "${output}" == *"Usage:"* ]]
 }
@@ -49,6 +50,12 @@ fetch() {
     "${RUN[@]}" fetch --latest --get-hash "$BATS_URL"
     [ "$status" -eq 0 ]
     [[ "${output}" =~ ^[0-9a-z]{20,}$ ]]
+}
+
+@test "fetch commit hash for test branch" {
+    "${RUN[@]}" fetch --get-hash --set-version=test "$FETCH_RAW_TEST"
+    [ "$status" -eq 0 ]
+    [[ "${output}" == "412166526a6163b07f24012c04066acc196ddd96" ]]
 }
 
 @test "fetch specific commit digest" {

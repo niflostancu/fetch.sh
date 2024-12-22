@@ -7,7 +7,7 @@
 #
 # You can use it for the following services:
 #  - github.com: released assets (tagged versions);
-#  - raw.githubusercontent.com resources (version placeholders in tags);
+#  - raw.githubusercontent.com resources (version placeholders for refs/heads/tags);
 #  - hub.docker.com: for docker tags (specify jq filtering using # in URL);
 
 set -e
@@ -132,17 +132,22 @@ jq:run() { _debug -2 "jq -r $*"; jq -r "$*"; }
 # Accepted formats:
 # - https://github.com/{org}/{repo}(/releases/download/{VERSION}/...)?
 # - https://github.com/{org}/{repo}(/archive/refs/tags/{VERSION}.(zip|tar.gz))?
+# - https://raw.githubusercontent.com/{org}/{repo}/refs/tags/{VERSION}/...
+# - https://raw.githubusercontent.com/{org}/{repo}/refs/heads/{BRANCH}/...
 function service:github:parse_url() {
-	_GH_FULLREPO=""; _GH_URL_REST=""
+	_GH_FULLREPO=""; _GH_URL_REST=""; _GH_REF_TYPE=""
 	if [[ "$1" =~ ^https?://[^/]+/([^/]+/[^/]+)([/#].*)?$ ]]; then
 		_GH_FULLREPO="${BASH_REMATCH[1]}"
 		_GH_URL_REST="${BASH_REMATCH[2]#/}"
+		if [[ "$_GH_URL_REST" =~ ^(archive/)?refs?/(heads|tags)([/#].*)?$ ]]; then
+			_GH_REF_TYPE="${BASH_REMATCH[2]}"
+		fi
 	else
 		_fatal "Unable to parse URL: $1"
 	fi
 }
 function service:github:fetch_metadata() {
-	local FIELD="$1" line= JQ_FILTERS=
+	local FIELD="$1" line="" JQ_FILTERS=""
 	local API_URL="https://api.github.com/repos/$_GH_FULLREPO" 
 	local PREFIX="${USER_VARS[prefix]}" SUFFIX="${USER_VARS[suffix]}"
 	local PRERELEASE=${USER_VARS[prerelease]}
@@ -162,15 +167,13 @@ function service:github:fetch_metadata() {
 		curl:fetch "$API_URL" | jq:run "$JQ_FILTERS"
 	elif [[ "$FIELD" == "hash" ]]; then
 		# fetch commit SHA from the GH API
-		API_URL+="/git/ref/tags/${META["version"]}" 
+		API_URL+="/git/refs/${_GH_REF_TYPE:-tags}/${META["version"]}" 
 		curl:fetch "$API_URL" | jq:run ".object.sha"
 	else _fatal "Metadata field supported: $FIELD"; fi
 }
 function service:github:get_download_url() { replace_metadata "$1"; }
 
-# Github Raw download URL parser
-# Accepted formats:
-# - https://raw.githubusercontent.com/{org}/{repository}/{VERSION}/...
+# Github Raw URL service alias (see github above)
 function service:github_raw:parse_url() { service:github:parse_url "$@"; }
 function service:github_raw:fetch_metadata() { service:github:fetch_metadata "$@"; }
 function service:github_raw:get_download_url() { replace_metadata "$1"; }
